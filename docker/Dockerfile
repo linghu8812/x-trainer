@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/isaac-lab:2.1.0
+FROM nvcr.io/nvidia/isaac-lab:2.3.2
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
