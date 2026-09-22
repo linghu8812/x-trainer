@@ -1,0 +1,12 @@
+/workspace/isaaclab/isaaclab.sh -p scripts/evaluation/policy_inference_2.py \
+    --task=LeIsaac-XTrainer-PickCube-v0 \
+    --eval_rounds=10 \
+    --policy_type=xtrainer_motus \
+    --policy_host=192.168.212.32 \
+    --policy_port=8010 \
+    --policy_timeout_ms=8000 \
+    --policy_action_horizon=16 \
+    --policy_language_instruction="Grab cube and place into plate" \
+    --device=cuda \
+    --enable_cameras \
+    --policy_checkpoint_path="dummy"

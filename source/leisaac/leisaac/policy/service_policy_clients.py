@@ -319,3 +319,94 @@ class OpenPIServicePolicyClient(WebsocketServicePolicy):
         processed_action = convert_lerobot_action_to_leisaac(action_chunk)
 
         return torch.from_numpy(processed_action[:, None, :])
+
+
+class MotusHttpClientPolicyClient:
+    """
+    HTTP JSON client for Motus RoboTwin deploy_robotwin.py FastAPI server
+    Endpoints: POST /act, POST /reset, GET /health
+    """
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        timeout_ms: int,
+        camera_infos: dict,
+        task_type: str,
+        actions_per_chunk: int,
+        device: str
+    ):
+        import requests
+        self.host = host
+        self.port = port
+        self.timeout = timeout_ms / 1000.0
+        self.act_url = f"http://{host}:{port}/act"
+        self.reset_url = f"http://{host}:{port}/reset"
+        self.health_url = f"http://{host}:{port}/health"
+        self.camera_infos = camera_infos
+        self.task_type = task_type
+        self.actions_per_chunk = actions_per_chunk
+        self.device = torch.device(device)
+
+        # health check
+        try:
+            print(f'self.timeout: {self.timeout}')
+            resp = requests.get(self.health_url, timeout=self.timeout)
+            resp.raise_for_status()
+            print(f"✅ Motus HTTP server connected: {self.host}:{self.port}")
+            print(f"Server info: {resp.json()}")
+        except Exception as e:
+            raise RuntimeError(f"❌ Cannot connect Motus HTTP server {self.host}:{self.port}, error: {e}")
+
+    def get_action(self, obs_dict: dict) -> torch.Tensor:
+        """
+        LeIsaac XTrainer观测：
+        left_joint_pos_rel (7), right_joint_pos_rel (7) → concat 14dim proprio
+        top, left_wrist, right_wrist 三张相机图
+        """
+        import requests
+        import numpy as np
+
+        # 组装Motus payload
+        payload = {}
+        payload["language_instruction"] = obs_dict["task_description"]
+
+        # ========== 拼接左右臂关节，拼成14维proprio ==========
+        left_q = obs_dict["left_joint_pos_rel"][:, :7]
+        right_q = obs_dict["right_joint_pos_rel"][:, :7]
+        proprio_tensor = torch.cat([left_q, right_q], dim=-1)  # [1,7] + [1,7] → [1,14]
+        payload["proprio"] = proprio_tensor.detach().cpu().numpy().tolist()
+
+        # ========== 相机映射：top→image0，left_wrist→image1，right_wrist→image2 ==========
+        payload["image0"] = obs_dict["top"].detach().squeeze(0).cpu().numpy().tolist()
+        payload["image1"] = obs_dict["left_wrist"].detach().squeeze(0).cpu().numpy().tolist()
+        payload["image2"] = obs_dict["right_wrist"].detach().squeeze(0).cpu().numpy().tolist()
+
+        img0 = obs_dict["top"].detach().squeeze(0).cpu().numpy()
+        img1 = obs_dict["left_wrist"].detach().squeeze(0).cpu().numpy()
+        img2 = obs_dict["right_wrist"].detach().squeeze(0).cpu().numpy()
+        print(f"img0 shape:{img0.shape}, dtype:{img0.dtype}")
+        print(f"img1 shape:{img1.shape}, dtype:{img1.dtype}")
+        print(f"img2 shape:{img2.shape}, dtype:{img2.dtype}")
+
+        try:
+            resp = requests.post(self.act_url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            actions_np = np.array(data["action"], dtype=np.float32)
+            # shape [T,14] → [T, num_envs=1, action_dim=14]
+            actions_torch = torch.from_numpy(actions_np).unsqueeze(1).to(self.device)
+            return actions_torch
+        except Exception as e:
+            raise RuntimeError(f"Motus /act request failed: {e}")
+
+
+    def reset(self):
+        """调用motus /reset接口重置episode"""
+        import requests
+        try:
+            resp = requests.post(self.reset_url, json={}, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise RuntimeError(f"Motus /reset request failed: {e}")
